@@ -233,19 +233,19 @@ def _inyectar_estilos():
         """
         <style>
         .block-container {
-            padding-top: 1.5rem;
+            padding-top: 1.4rem;
             padding-bottom: 2.5rem;
-        }
-        .card-box {
-            background: #171c26;
-            border: 1px solid #2a3344;
-            border-radius: 10px;
-            padding: 14px 16px;
-            margin-bottom: 12px;
         }
         .match-row {
             background: #171c26;
             border: 1px solid #263042;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+        }
+        .match-row-sel {
+            background: #1a263a;
+            border: 1.5px solid #4d8df0;
             border-radius: 8px;
             padding: 10px 14px;
             margin-bottom: 8px;
@@ -257,12 +257,29 @@ def _inyectar_estilos():
             padding: 10px 14px;
             margin-bottom: 8px;
         }
+        .match-row-ev-sel {
+            background: #162c22;
+            border: 1.5px solid #5ee39c;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+        }
         .badge-ev {
             display: inline-block;
             background: #1f6f47;
             color: #d7ffe9;
             font-weight: 700;
             font-size: 0.78rem;
+            padding: 2px 8px;
+            border-radius: 999px;
+            margin-left: 8px;
+        }
+        .badge-sel {
+            display: inline-block;
+            background: #274c85;
+            color: #dcebff;
+            font-weight: 700;
+            font-size: 0.75rem;
             padding: 2px 8px;
             border-radius: 999px;
             margin-left: 8px;
@@ -293,6 +310,7 @@ def _init_state():
         ss.banca = 1000.0
         ss.liga_activa = "PD"
         ss.modelo_activo = "Poisson"
+        ss.partido_sel_idx = 0
         ss.apuestas_activas = []
         ss.historial_apuestas = []
         ss.jornada_por_liga = {}
@@ -313,7 +331,6 @@ _inyectar_estilos()
 _init_state()
 ss = st.session_state
 
-# Encabezado y controles globales
 st.markdown("### ⚽ Simulador Cuantitativo de Apuestas — Ligas & Europa")
 
 c_liga, c_mod, c_banca, c_roi, c_dep, c_sync, c_rst = st.columns([2.2, 1.7, 1.4, 1.3, 1.15, 1.15, 1.15])
@@ -328,6 +345,7 @@ with c_liga:
     )
     if nueva_liga != ss.liga_activa:
         ss.liga_activa = nueva_liga
+        ss.partido_sel_idx = 0
         if ss.liga_activa not in ss.datos_por_liga:
             ss.datos_por_liga[ss.liga_activa] = _cargar_liga(ss.liga_activa, forzar_red=False)
         st.rerun()
@@ -358,6 +376,7 @@ with c_sync:
     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
     if st.button("Sync API", use_container_width=True):
         ss.datos_por_liga[ss.liga_activa] = _cargar_liga(ss.liga_activa, forzar_red=True)
+        ss.partido_sel_idx = 0
         ss.msg = f"Sincronizado {ss.liga_activa} desde API/caché."
         st.rerun()
 
@@ -366,6 +385,7 @@ with c_rst:
     if st.button("Reiniciar", use_container_width=True):
         ss.banca_inicial = 1000.0
         ss.banca = 1000.0
+        ss.partido_sel_idx = 0
         ss.apuestas_activas = []
         ss.historial_apuestas = []
         ss.jornada_por_liga = {}
@@ -393,7 +413,11 @@ partidos = _construir_partidos_jornada(
     jornada_actual,
 )
 
-# Exposición de la jornada actual
+if partidos:
+    ss.partido_sel_idx = max(0, min(ss.partido_sel_idx, len(partidos) - 1))
+else:
+    ss.partido_sel_idx = 0
+
 riesgo_jornada = sum(
     float(ap.get("monto", 0.0))
     for ap in ss.apuestas_activas
@@ -404,7 +428,8 @@ max_exp = LIMITE_EXPOSICION_JORNADA * 100.0
 
 col_izq, col_der = st.columns([1.65, 1.05], gap="large")
 
-partido_sel = None
+partido_sel = partidos[ss.partido_sel_idx] if partidos else None
+
 with col_izq:
     tab_partidos, tab_tabla, tab_hist = st.tabs(["📋 Partidos", "🏆 Tabla", "📊 Historial"])
 
@@ -413,10 +438,27 @@ with col_izq:
         if not partidos:
             st.warning("No hay partidos próximos cargados para esta competición.")
         else:
-            for p in partidos:
+            sel_idx = st.selectbox(
+                "Partido seleccionado para analizar",
+                options=list(range(len(partidos))),
+                index=ss.partido_sel_idx,
+                key=f"sel_partido_{ss.liga_activa}_{jornada_actual}",
+                format_func=lambda i: f"#{partidos[i]['id']:02d} {partidos[i]['local']} vs {partidos[i]['visitante']}",
+            )
+            if sel_idx != ss.partido_sel_idx:
+                ss.partido_sel_idx = sel_idx
+                st.rerun()
+
+            for i, p in enumerate(partidos):
                 mejor_p = _mejor_mercado_partido(p)
-                clase_fila = "match-row-ev" if mejor_p["ventaja"] else "match-row"
-                badge_html = (
+                es_sel = (i == ss.partido_sel_idx)
+                if mejor_p["ventaja"]:
+                    clase_fila = "match-row-ev-sel" if es_sel else "match-row-ev"
+                else:
+                    clase_fila = "match-row-sel" if es_sel else "match-row"
+
+                badge_sel = "<span class='badge-sel'>SELECCIONADO</span>" if es_sel else ""
+                badge_ev = (
                     f"<span class='badge-ev'>EV+ {mejor_p['mercado']} {mejor_p['ev_pct']:+.1f}%</span>"
                     if mejor_p["ventaja"]
                     else ""
@@ -425,7 +467,7 @@ with col_izq:
                     f"""
                     <div class='{clase_fila}'>
                         <div><strong>#{p['id']:02d} {p['local']} vs {p['visitante']}</strong>
-                        <span class='badge-source'>{p['fuente_cuota']}</span>{badge_html}</div>
+                        <span class='badge-source'>{p['fuente_cuota']}</span>{badge_sel}{badge_ev}</div>
                         <div class='muted-line'>1: <strong>{p['cuota_1']:.2f}</strong> ·
                         X: <strong>{p['cuota_x']:.2f}</strong> ·
                         2: <strong>{p['cuota_2']:.2f}</strong> ·
@@ -435,13 +477,6 @@ with col_izq:
                     """,
                     unsafe_allow_html=True,
                 )
-
-            sel_idx = st.selectbox(
-                "Partido seleccionado para analizar",
-                options=list(range(len(partidos))),
-                format_func=lambda i: f"#{partidos[i]['id']:02d} {partidos[i]['local']} vs {partidos[i]['visitante']}",
-            )
-            partido_sel = partidos[sel_idx]
 
     with tab_tabla:
         if datos_liga["tabla"]:
@@ -470,8 +505,7 @@ with col_izq:
             st.info("Aún no hay apuestas resueltas en tu historial.")
 
 with col_der:
-    st.markdown("<div class='card-box'>", unsafe_allow_html=True)
-    st.markdown("**🔬 Comparativa de Modelos y Ejecución**")
+    st.markdown("#### 🔬 Comparativa de Modelos y Ejecución")
 
     if partido_sel:
         st.markdown(
@@ -576,11 +610,11 @@ with col_der:
                 ss.ultimos_resultados[ss.liga_activa] = res_lista
                 if idx_j + 1 < len(lista_j):
                     ss.jornada_por_liga[ss.liga_activa] = lista_j[idx_j + 1]
+                ss.partido_sel_idx = 0
                 ss.msg = f"{ss.liga_activa} J{jornada_actual} simulada. Banca: ${ss.banca:.2f}"
                 st.rerun()
 
     st.caption(f"Exposición J{jornada_actual}: ${riesgo_jornada:.2f} ({pct_exp:.1f}% / máx {max_exp:.0f}%)")
-    st.markdown("</div>", unsafe_allow_html=True)
 
     if ss.apuestas_activas:
         st.markdown("**Apuestas activas**")
