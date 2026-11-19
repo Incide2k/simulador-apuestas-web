@@ -22,7 +22,6 @@ from modelos_sim import (
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RUTA_LOG_CLV = os.path.join(BASE_DIR, "registro_momios_clv.json")
 
 UMBRAL_EV_MINIMO = 2.5
 TOPE_STAKE_BANCA = 0.10
@@ -151,6 +150,40 @@ def _consenso_y_ventaja(partido: dict, mercado: str) -> tuple[str, bool]:
     return consenso, ventaja
 
 
+def _mejor_mercado_partido(partido: dict) -> dict:
+    mejor = None
+    for m in MERCADOS_DISPONIBLES:
+        cuota, prob = _get_cuota_prob(partido, m)
+        ev = _ev_pct(partido, m)
+        consenso, ventaja = _consenso_y_ventaja(partido, m)
+        item = {
+            "mercado": m,
+            "cuota": cuota,
+            "prob": prob,
+            "ev_pct": ev,
+            "consenso": consenso,
+            "ventaja": ventaja,
+        }
+        if mejor is None or item["ev_pct"] > mejor["ev_pct"]:
+            mejor = item
+    return mejor
+
+
+def _diagnostico_mercado(partido: dict, mercado: str) -> dict:
+    if mercado in ("1", "X", "2"):
+        cuotas = [partido["cuota_1"], partido["cuota_x"], partido["cuota_2"]]
+    else:
+        cuotas = [partido["cuota_over25"], partido["cuota_under25"]]
+    suma_imp = sum(1.0 / max(1.01, float(q)) for q in cuotas)
+    overround_pct = max(0.0, (suma_imp - 1.0) * 100.0)
+    _, prob_mod = _get_cuota_prob(partido, mercado)
+    cuota_justa = round(1.0 / max(0.02, min(0.95, prob_mod)), 2)
+    return {
+        "cuota_justa": cuota_justa,
+        "overround_pct": round(overround_pct, 1),
+    }
+
+
 def _kelly_sugerido(banca: float, prob: float, cuota: float, fraccion: float = 0.25) -> float:
     b = cuota - 1.0
     if b <= 0 or banca <= 0:
@@ -195,6 +228,64 @@ def _cargar_liga(codigo_liga: str, forzar_red: bool = False) -> dict:
     }
 
 
+def _inyectar_estilos():
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2.5rem;
+        }
+        .card-box {
+            background: #171c26;
+            border: 1px solid #2a3344;
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 12px;
+        }
+        .match-row {
+            background: #171c26;
+            border: 1px solid #263042;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+        }
+        .match-row-ev {
+            background: #14241d;
+            border: 1px solid #2f7a55;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+        }
+        .badge-ev {
+            display: inline-block;
+            background: #1f6f47;
+            color: #d7ffe9;
+            font-weight: 700;
+            font-size: 0.78rem;
+            padding: 2px 8px;
+            border-radius: 999px;
+            margin-left: 8px;
+        }
+        .badge-source {
+            display: inline-block;
+            background: #243047;
+            color: #b8c7e0;
+            font-size: 0.76rem;
+            padding: 2px 8px;
+            border-radius: 6px;
+            margin-left: 6px;
+        }
+        .muted-line {
+            color: #9aa8be;
+            font-size: 0.85rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _init_state():
     ss = st.session_state
     if "banca_inicial" not in ss:
@@ -213,14 +304,19 @@ def _init_state():
         ss.datos_por_liga[ss.liga_activa] = _cargar_liga(ss.liga_activa, forzar_red=False)
 
 
-st.set_page_config(page_title="Simulador de Apuestas - Ligas & Europa", layout="wide")
+st.set_page_config(
+    page_title="Simulador de Apuestas — Ligas & Europa",
+    page_icon="⚽",
+    layout="wide",
+)
+_inyectar_estilos()
 _init_state()
 ss = st.session_state
 
-# Barra superior
-st.title("Simulador de Apuestas — Ligas & Europa (Web Streamlit)")
+# Encabezado y controles globales
+st.markdown("### ⚽ Simulador Cuantitativo de Apuestas — Ligas & Europa")
 
-c_liga, c_mod, c_banca, c_roi, c_dep, c_sync, c_rst = st.columns([2.2, 1.8, 1.5, 1.4, 1.2, 1.2, 1.2])
+c_liga, c_mod, c_banca, c_roi, c_dep, c_sync, c_rst = st.columns([2.2, 1.7, 1.4, 1.3, 1.15, 1.15, 1.15])
 
 with c_liga:
     codigos = list(LIGAS_FD.keys())
@@ -228,7 +324,7 @@ with c_liga:
         "Competición",
         options=codigos,
         index=codigos.index(ss.liga_activa),
-        format_func=lambda k: f"{LIGAS_FD[k]['corto']} ({k})",
+        format_func=lambda k: f"{LIGAS_FD[k]['nombre']} ({k})",
     )
     if nueva_liga != ss.liga_activa:
         ss.liga_activa = nueva_liga
@@ -248,25 +344,25 @@ with c_mod:
 
 roi = ((ss.banca - ss.banca_inicial) / max(1.0, ss.banca_inicial)) * 100.0
 c_banca.metric("Banca", f"${ss.banca:,.2f}")
-c_roi.metric("ROI", f"{roi:+.2f}%")
+c_roi.metric("ROI", f"{roi:+.2f}%", delta=f"{ss.banca - ss.banca_inicial:+.2f}")
 
 with c_dep:
-    st.write("")
-    if st.button(f"+${int(DEPOSITO_RAPIDO)} Bank", use_container_width=True):
+    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+    if st.button(f"+${int(DEPOSITO_RAPIDO)}", use_container_width=True):
         ss.banca = round(ss.banca + DEPOSITO_RAPIDO, 2)
         ss.banca_inicial = round(ss.banca_inicial + DEPOSITO_RAPIDO, 2)
         ss.msg = f"Depósito +${DEPOSITO_RAPIDO:.2f} aplicado."
         st.rerun()
 
 with c_sync:
-    st.write("")
+    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
     if st.button("Sync API", use_container_width=True):
         ss.datos_por_liga[ss.liga_activa] = _cargar_liga(ss.liga_activa, forzar_red=True)
         ss.msg = f"Sincronizado {ss.liga_activa} desde API/caché."
         st.rerun()
 
 with c_rst:
-    st.write("")
+    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
     if st.button("Reiniciar", use_container_width=True):
         ss.banca_inicial = 1000.0
         ss.banca = 1000.0
@@ -278,15 +374,12 @@ with c_rst:
         ss.msg = "Sesión reiniciada a $1,000.00."
         st.rerun()
 
-st.caption(ss.msg)
+st.info(ss.msg)
 
 datos_liga = ss.datos_por_liga[ss.liga_activa]
 lista_j = datos_liga["lista_jornadas"]
 j_guardada = ss.jornada_por_liga.get(ss.liga_activa)
-if j_guardada in lista_j:
-    idx_j = lista_j.index(j_guardada)
-else:
-    idx_j = 0
+idx_j = lista_j.index(j_guardada) if j_guardada in lista_j else 0
 jornada_actual = lista_j[idx_j] if lista_j else 1
 if lista_j:
     ss.jornada_por_liga[ss.liga_activa] = jornada_actual
@@ -300,26 +393,53 @@ partidos = _construir_partidos_jornada(
     jornada_actual,
 )
 
-# Layout principal: izquierda (partidos / tabla / historial) y derecha (análisis y apuestas)
-col_izq, col_der = st.columns([1.65, 1.0])
+# Exposición de la jornada actual
+riesgo_jornada = sum(
+    float(ap.get("monto", 0.0))
+    for ap in ss.apuestas_activas
+    if ap.get("liga") == ss.liga_activa and ap.get("jornada") == jornada_actual
+)
+pct_exp = (riesgo_jornada / ss.banca * 100.0) if ss.banca > 0 else 0.0
+max_exp = LIMITE_EXPOSICION_JORNADA * 100.0
+
+col_izq, col_der = st.columns([1.65, 1.05], gap="large")
 
 partido_sel = None
 with col_izq:
-    tab_partidos, tab_tabla, tab_hist = st.tabs(["Partidos", "Tabla", "Historial"])
+    tab_partidos, tab_tabla, tab_hist = st.tabs(["📋 Partidos", "🏆 Tabla", "📊 Historial"])
 
     with tab_partidos:
-        st.subheader(f"{LIGAS_FD[ss.liga_activa]['nombre']} — Jornada {jornada_actual}")
+        st.markdown(f"**{LIGAS_FD[ss.liga_activa]['nombre']} — Jornada {jornada_actual}**")
         if not partidos:
-            st.info("No hay partidos próximos cargados para esta competición.")
+            st.warning("No hay partidos próximos cargados para esta competición.")
         else:
-            opciones_idx = list(range(len(partidos)))
-            sel_idx = st.radio(
-                "Selecciona un partido",
-                options=opciones_idx,
-                format_func=lambda i: (
-                    f"#{partidos[i]['id']:02d} {partidos[i]['local']} vs {partidos[i]['visitante']} "
-                    f"| 1:{partidos[i]['cuota_1']:.2f} X:{partidos[i]['cuota_x']:.2f} 2:{partidos[i]['cuota_2']:.2f}"
-                ),
+            for p in partidos:
+                mejor_p = _mejor_mercado_partido(p)
+                clase_fila = "match-row-ev" if mejor_p["ventaja"] else "match-row"
+                badge_html = (
+                    f"<span class='badge-ev'>EV+ {mejor_p['mercado']} {mejor_p['ev_pct']:+.1f}%</span>"
+                    if mejor_p["ventaja"]
+                    else ""
+                )
+                st.markdown(
+                    f"""
+                    <div class='{clase_fila}'>
+                        <div><strong>#{p['id']:02d} {p['local']} vs {p['visitante']}</strong>
+                        <span class='badge-source'>{p['fuente_cuota']}</span>{badge_html}</div>
+                        <div class='muted-line'>1: <strong>{p['cuota_1']:.2f}</strong> ·
+                        X: <strong>{p['cuota_x']:.2f}</strong> ·
+                        2: <strong>{p['cuota_2']:.2f}</strong> ·
+                        O2.5: <strong>{p['cuota_over25']:.2f}</strong> ·
+                        U2.5: <strong>{p['cuota_under25']:.2f}</strong></div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            sel_idx = st.selectbox(
+                "Partido seleccionado para analizar",
+                options=list(range(len(partidos))),
+                format_func=lambda i: f"#{partidos[i]['id']:02d} {partidos[i]['local']} vs {partidos[i]['visitante']}",
             )
             partido_sel = partidos[sel_idx]
 
@@ -327,10 +447,18 @@ with col_izq:
         if datos_liga["tabla"]:
             st.dataframe(datos_liga["tabla"], use_container_width=True, hide_index=True)
         else:
-            st.info("Sin tabla disponible.")
+            st.info("Sin tabla de posiciones disponible.")
 
     with tab_hist:
         if ss.historial_apuestas:
+            ganadas = sum(1 for a in ss.historial_apuestas if a.get("estado") == "GANADA")
+            total_h = len(ss.historial_apuestas)
+            acc_h = (ganadas / total_h * 100.0) if total_h else 0.0
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Resueltas", total_h)
+            m2.metric("Ganadas", ganadas)
+            m3.metric("Acierto", f"{acc_h:.1f}%")
+
             st.dataframe(ss.historial_apuestas, use_container_width=True, hide_index=True)
             st.download_button(
                 "Descargar historial JSON",
@@ -339,34 +467,59 @@ with col_izq:
                 mime="application/json",
             )
         else:
-            st.info("Aún no hay apuestas resueltas.")
+            st.info("Aún no hay apuestas resueltas en tu historial.")
 
 with col_der:
-    st.subheader("Comparativa y Ejecución")
+    st.markdown("<div class='card-box'>", unsafe_allow_html=True)
+    st.markdown("**🔬 Comparativa de Modelos y Ejecución**")
+
     if partido_sel:
-        st.markdown(f"**{partido_sel['local']} vs {partido_sel['visitante']}** (`{partido_sel['fuente_cuota']}`)")
-        st.write(f"xG ({ss.modelo_activo}): **{partido_sel['xg_local']:.2f} - {partido_sel['xg_visitante']:.2f}**")
+        st.markdown(
+            f"<div style='font-size:1.05rem;font-weight:700;margin-bottom:4px;'>"
+            f"{partido_sel['local']} vs {partido_sel['visitante']}"
+            f"<span class='badge-source'>{partido_sel['fuente_cuota']}</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"xG ({ss.modelo_activo}): {partido_sel['xg_local']:.2f} - {partido_sel['xg_visitante']:.2f}"
+        )
 
         filas_mod = []
         for nom_m in MODELOS_DISPONIBLES:
             m_dat = partido_sel["modelos"][nom_m]
             filas_mod.append({
-                "Modelo": nom_m,
-                "1%": round(m_dat["prob_1"] * 100, 1),
-                "X%": round(m_dat["prob_x"] * 100, 1),
-                "2%": round(m_dat["prob_2"] * 100, 1),
-                "O2.5%": round(m_dat["prob_over25"] * 100, 1),
+                "Modelo": f"▶ {nom_m}" if nom_m == ss.modelo_activo else nom_m,
+                "1": f"{m_dat['prob_1'] * 100:.1f}%",
+                "X": f"{m_dat['prob_x'] * 100:.1f}%",
+                "2": f"{m_dat['prob_2'] * 100:.1f}%",
+                "O2.5": f"{m_dat['prob_over25'] * 100:.1f}%",
+                "xG": f"{m_dat['xg_local']:.1f}-{m_dat['xg_visitante']:.1f}",
             })
-        st.table(filas_mod)
+        st.dataframe(filas_mod, use_container_width=True, hide_index=True)
 
         mercado_sel = st.selectbox("Mercado", options=MERCADOS_DISPONIBLES)
         cuota_sel, prob_sel = _get_cuota_prob(partido_sel, mercado_sel)
         ev_val = _ev_pct(partido_sel, mercado_sel)
         consenso_txt, tiene_ventaja = _consenso_y_ventaja(partido_sel, mercado_sel)
+        diag = _diagnostico_mercado(partido_sel, mercado_sel)
         kelly_val = _kelly_sugerido(ss.banca, prob_sel, cuota_sel)
-        monto_sel = st.number_input("Monto ($)", min_value=1.0, max_value=max(1.0, ss.banca), value=min(25.0, max(1.0, ss.banca)), step=5.0)
 
-        st.write(f"Cuota: **@{cuota_sel:.2f}** | EV: **{ev_val:+.1f}%** | **{consenso_txt}** | Kelly tope: **${kelly_val:.2f}**")
+        st.markdown(
+            f"<div class='muted-line' style='margin-bottom:8px;'>"
+            f"Cuota: <strong>@{cuota_sel:.2f}</strong> · Justa: <strong>@{diag['cuota_justa']:.2f}</strong> · "
+            f"Vig: <strong>{diag['overround_pct']:.1f}%</strong><br/>"
+            f"EV: <strong>{ev_val:+.1f}%</strong> · <strong>{consenso_txt}</strong> · "
+            f"Kelly tope: <strong>${kelly_val:.2f}</strong></div>",
+            unsafe_allow_html=True,
+        )
+
+        monto_sel = st.number_input(
+            "Monto ($)",
+            min_value=1.0,
+            max_value=max(1.0, ss.banca),
+            value=min(25.0, max(1.0, ss.banca)),
+            step=5.0,
+        )
 
         b1, b2 = st.columns(2)
         with b1:
@@ -425,6 +578,9 @@ with col_der:
                     ss.jornada_por_liga[ss.liga_activa] = lista_j[idx_j + 1]
                 ss.msg = f"{ss.liga_activa} J{jornada_actual} simulada. Banca: ${ss.banca:.2f}"
                 st.rerun()
+
+    st.caption(f"Exposición J{jornada_actual}: ${riesgo_jornada:.2f} ({pct_exp:.1f}% / máx {max_exp:.0f}%)")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if ss.apuestas_activas:
         st.markdown("**Apuestas activas**")
